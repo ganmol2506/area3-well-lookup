@@ -1,0 +1,16 @@
+{
+  "name": "Area-III Well Lookup",
+  "short_name": "Well Lookup",
+  "description": "Enter a well number to see its test history, WSS jobs, gain/loss, water samples and workover studies from the WSS Master File.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#12161b",
+  "theme_color": "#12161b",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
