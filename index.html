@@ -223,6 +223,13 @@ footer{text-align:center;padding:30px 16px;color:var(--faint);font-size:.68rem;f
 @media(min-width:480px){
   .wellhead .num{font-size:2.5rem}
 }
+.chartbox{border:1px solid var(--line);background:var(--surface2);padding:10px 10px 8px;margin-bottom:10px}
+.chartbox .chdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px}
+.chartbox .ctitle{font-size:.62rem;letter-spacing:.5px;color:var(--faint);text-transform:uppercase;font-family:var(--mono)}
+.chartbox .legend{display:flex;gap:10px;flex-wrap:wrap}
+.chartbox .legend .li{display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:.62rem;color:var(--dim)}
+.chartbox .legend .sw{width:9px;height:2.5px;border-radius:2px;display:inline-block}
+.chartbox svg{display:block;width:100%;height:auto}
 </style>
 </head>
 <body>
@@ -232,7 +239,7 @@ footer{text-align:center;padding:30px 16px;color:var(--faint);font-size:.68rem;f
   <div class="searchrow">
     <div class="searchbox">
       <span style="color:var(--faint);font-size:1rem">#</span>
-      <input id="wellInput" type="text" inputmode="numeric" placeholder="Enter well number" autocomplete="off" onkeydown="if(event.key==='Enter')doSearch()">
+      <input id="wellInput" type="text" inputmode="text" autocapitalize="characters" placeholder="Enter well number" autocomplete="off" onkeydown="if(event.key==='Enter')doSearch()">
     </div>
     <button class="goBtn" onclick="doSearch()">→</button>
     <button class="uploadBtn" id="uploadBtn" onclick="document.getElementById('fileIn').click()" title="Upload Master File">⇪</button>
@@ -295,6 +302,52 @@ function dstr(v){if(v instanceof Date){const p=n=>String(n).padStart(2,'0');retu
 function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
 function fmt(n,d=2){n=+n||0;return n.toLocaleString('en-IN',{maximumFractionDigits:d,minimumFractionDigits:0});}
 function normWell(v){return String(v==null?'':v).trim().replace(/\.0+$/,'');}
+const DAY=86400000;
+/* Formation Gas = Total Gas − Lift Gas. WELL TEST HISTORY has both fields
+   per test, so this is always calculable there. The WSS GAIN LOSS sheet has
+   NO lift-gas column at all (checked directly against the source file) —
+   Formation Gas cannot be derived for those 5 manually-logged records, so
+   they show Total Gas instead, clearly labelled as such. */
+function formationGasOf(t){
+  if(!t)return 0;
+  return Math.max(0,(t.gas||0)-(t.liftgas||0));
+}
+/* Three independently-scaled line series (Oil, Formation Gas, WC) over the
+   well's test history, oldest→newest left to right (the normal reading
+   direction for a time trend — this is separate from table ordering, which
+   is latest-first). Each series is scaled to its own min/max since their
+   magnitudes differ by orders of magnitude (Oil ~0-50, Formation Gas
+   ~0-60000, WC 0-100%) — the point is to see each one's shape over time. */
+function buildTrendChart(chartTests){
+  const w=620,h=150,padL=6,padR=6,padT=10,padB=10;
+  const xs=chartTests.map(t=>+t.testDate);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),rangeX=(maxX-minX)||1;
+  const sx=x=>padL+(x-minX)/rangeX*(w-padL-padR);
+  function seriesPath(vals,color){
+    const lo=Math.min(0,...vals),hi=Math.max(...vals)||1,range=(hi-lo)||1;
+    const sy=v=>h-padB-(v-lo)/range*(h-padT-padB);
+    const pts=chartTests.map((t,i)=>sx(+t.testDate).toFixed(1)+','+sy(vals[i]).toFixed(1)).join(' ');
+    const lastX=sx(+chartTests[chartTests.length-1].testDate).toFixed(1);
+    const lastY=sy(vals[vals.length-1]).toFixed(1);
+    return {path:`<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.8" vector-effect="non-scaling-stroke"/><circle cx="${lastX}" cy="${lastY}" r="2.8" fill="${color}"/>`,lo,hi};
+  }
+  const oilVals=chartTests.map(t=>t.oil||0);
+  const fgVals=chartTests.map(t=>formationGasOf(t));
+  const wcVals=chartTests.map(t=>t.wc||0);
+  const oilS=seriesPath(oilVals,'#00c2a8');
+  const fgS=seriesPath(fgVals,'#ffb020');
+  const wcS=seriesPath(wcVals,'#5ec8ff');
+  let grid='';for(let i=1;i<4;i++){const y=padT+(h-padT-padB)*i/4;grid+=`<line x1="${padL}" y1="${y.toFixed(1)}" x2="${w-padR}" y2="${y.toFixed(1)}" stroke="#2a333e" stroke-width="1"/>`;}
+  return `<div class="chdr">
+    <div class="ctitle">Oil / Formation Gas / WC · ${dstr(chartTests[0].testDate)} → ${dstr(chartTests[chartTests.length-1].testDate)}</div>
+    <div class="legend">
+      <div class="li"><span class="sw" style="background:#00c2a8"></span>Oil ${fmt(oilS.lo,2)}–${fmt(oilS.hi,2)} m³/d</div>
+      <div class="li"><span class="sw" style="background:#ffb020"></span>Form. Gas ${fmt(fgS.lo,0)}–${fmt(fgS.hi,0)} SCMD</div>
+      <div class="li"><span class="sw" style="background:#5ec8ff"></span>WC ${fmt(wcS.lo,1)}–${fmt(wcS.hi,1)}%</div>
+    </div></div>
+  <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${grid}${wcS.path}${fgS.path}${oilS.path}</svg>
+  <div class="mut" style="font-size:.65rem;color:var(--faint);margin-top:4px">each line scaled to its own range, independently — for shape/trend, not cross-series comparison</div>`;
+}
 
 function findHeaderRow(G,mustHave){
   for(let r=0;r<Math.min(G.length,25);r++){
@@ -327,11 +380,19 @@ function cvDate(row,idx){if(idx<0)return null;const v=cv(row,idx);const d=xlDate
   const s=String(v||'').trim();const m=s.match(/(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})/);
   if(m){let y=+m[3];if(y<100)y+=2000;return new Date(y,+m[2]-1,+m[1]);}return null;}
 
-const JOB_KEYWORDS=['CTU','ACID','HOC','SOLVENT','N2','PICKLING','WATER S/OFF','PROFILE','X-MAS','FRACT','XYLENE','WMT','GLV','SWCT','HYDRO','NITRIFIED','IPA','RETRIVAL','RETRIEVAL'];
+const JOB_KEYWORDS=['CTU','ACID','HOC','SOLVENT','N2','PICKLING','WATER S/OFF','PROFILE','X-MAS','FRACT','XYLENE','WMT','GLV','SWCT','HYDRO','NITRIFIED','IPA','RETRIVAL','RETRIEVAL','WOR','TTP','MUD ACID','FISHING'];
 function inferJobType(detail){
   const d=String(detail||'').toUpperCase();
   for(const k of JOB_KEYWORDS){if(d.includes(k))return k+' (inferred)';}
   return 'OTHER';
+}
+/* Workover-class jobs (WOR/TTP/fishing) are longer, more disruptive
+   operations than a chemical WSS job — the well typically needs longer to
+   settle before a test reading is representative, so job-effect matching
+   gives these a wider gap before accepting an "after" test as valid. */
+function isWorkoverClass(jobLabel){
+  const j=String(jobLabel||'').toUpperCase();
+  return /\bWOR\b|\bTTP\b|FISHING|WORKOVER/.test(j);
 }
 
 function parseJobsSheet(wb,sn,into){
@@ -373,10 +434,9 @@ function parseGainLoss(wb,sn,into){
     const preoil=cvNum(row,map.preoil),postoil=cvNum(row,map.postoil);
     const pregas=cvNum(row,map.pregas),postgas=cvNum(row,map.postgas);
     const hasPost=map.postoil>-1&&String(cv(row,map.postoil))!=='';
-    let oilgl=map.oilgl>-1?cvNum(row,map.oilgl):(hasPost?postoil-preoil:null);
+    let oilgl=hasPost?+((postoil||0)-(preoil||0)).toFixed(3):null;
     let gasgl=map.gasgl>-1?cvNum(row,map.gasgl):(hasPost?postgas-pregas:null);
-    let status=map.status>-1?String(cv(row,map.status)||'').replace(/[▲▼●]/g,'').trim().toUpperCase():'';
-    if(!status)status=!hasPost?'PENDING':(oilgl>0.01?'GAIN':oilgl<-0.01?'LOSS':'STABLE');
+    let status=hasPost?classifyGainLoss(preoil,postoil):'PENDING';
     into.push({date:cvDate(row,map.date),ggs:String(cv(row,map.ggs)||'').trim(),well:normWell(well),
       jobtype:String(cv(row,map.jobtype)||'').trim(),preliq:cvNum(row,map.preliq),prewc:cvNum(row,map.prewc),preoil,pregas,
       postliq:cvNum(row,map.postliq),postwc:cvNum(row,map.postwc),postoil,postgas,oilgl,gasgl,status,
@@ -494,8 +554,7 @@ function importMaster(inp){
       let total=0;
       wb.SheetNames.forEach(sn=>{
         const up=sn.toUpperCase().trim();
-        if(up.includes('WSS-WMT')&&up.includes('JOB'))total+=parseJobsSheet(wb,sn,MASTER.jobs);
-        else if(up==='JOB HISTORY'||(up.includes('JOB HISTORY')&&!up.includes('WSS')))total+=parseJobsSheet(wb,sn,MASTER.jobs);
+        if(up==='JOB HISTORY'||(up.includes('JOB HISTORY')&&!up.includes('WSS')))total+=parseJobsSheet(wb,sn,MASTER.jobs);
         else if(up.includes('GAIN')&&up.includes('LOSS')&&!up.includes('STATEMENT'))total+=parseGainLoss(wb,sn,MASTER.gainloss);
         else if(up.includes('WELL TEST HISTORY'))total+=parseWellTestHist(wb,sn,MASTER.testHist);
         else if(up.includes('WH SAMPLE'))total+=parseWHSample(wb,sn,MASTER.whSample);
@@ -530,13 +589,25 @@ function jumpTo(w){document.getElementById('wellInput').value=w;doSearch();}
 function doSearch(){
   const raw=document.getElementById('wellInput').value.trim();
   if(!raw)return;
-  const w=normWell(raw);
   if(!MASTER.loaded){showToast('Upload the Master File first, then search.',true);return;}
-  currentWell=w;visibleTestRows=15;openSects=new Set(['test']);
-  pushRecent(w);
+  currentWell=normWell(raw).toUpperCase();
+  visibleTestRows=15;openSects=new Set(['test']);
+  pushRecent(currentWell);
   renderMain();
   window.scrollTo({top:0,behavior:'instant'});
 }
+/* Some wells appear under more than one literal spelling across sheets —
+   e.g. "D-23" (dominant, correct form) vs a rare "D23" typo in one row.
+   Rather than guess which single spelling to search, gather every variant
+   that could mean the same well and merge all their records into one
+   profile, so a user never silently sees a partial picture. */
+function wellVariants(w){
+  const variants=new Set([w]);
+  const m=w.match(/^([A-Z]+)-?(\d+)$/);
+  if(m){variants.add(m[1]+'-'+m[2]);variants.add(m[1]+m[2]);}
+  return [...variants];
+}
+function matchesWell(recordWell,variants){return variants.includes(String(recordWell||'').toUpperCase());}
 
 function toggleSect(id){
   if(openSects.has(id))openSects.delete(id);else openSects.add(id);
@@ -567,11 +638,13 @@ function renderMain(){
   }
 
   const w=currentWell;
-  const tests=MASTER.testHist.filter(r=>r.well===w).sort((a,b)=>(b.testDate?+b.testDate:0)-(a.testDate?+a.testDate:0));
-  const jobs=MASTER.jobs.filter(r=>r.well===w).sort((a,b)=>(b.date?+b.date:0)-(a.date?+a.date:0));
-  const gl=MASTER.gainloss.filter(r=>r.well===w).sort((a,b)=>(b.date?+b.date:0)-(a.date?+a.date:0));
-  const wh=MASTER.whSample.filter(r=>r.well===w).sort((a,b)=>(b.date?+b.date:0)-(a.date?+a.date:0));
-  const bhs=MASTER.bhs.filter(r=>r.well===w).sort((a,b)=>(b.date?+b.date:0)-(a.date?+a.date:0));
+  const variants=wellVariants(w);
+  const tests=MASTER.testHist.filter(r=>matchesWell(r.well,variants)).sort((a,b)=>(b.testDate?+b.testDate:0)-(a.testDate?+a.testDate:0));
+  const jobs=MASTER.jobs.filter(r=>matchesWell(r.well,variants)).sort((a,b)=>(b.date?+b.date:0)-(a.date?+a.date:0));
+  const gl=MASTER.gainloss.filter(r=>matchesWell(r.well,variants)).sort((a,b)=>(b.date?+b.date:0)-(a.date?+a.date:0));
+  const wh=MASTER.whSample.filter(r=>matchesWell(r.well,variants)).sort((a,b)=>(b.date?+b.date:0)-(a.date?+a.date:0));
+  const bhs=MASTER.bhs.filter(r=>matchesWell(r.well,variants)).sort((a,b)=>(b.date?+b.date:0)-(a.date?+a.date:0));
+  const autoEffects=computeAutoJobEffects(w,tests,jobs);
 
   const anyData=tests.length||jobs.length||gl.length||wh.length||bhs.length;
   if(!anyData){
@@ -593,7 +666,7 @@ function renderMain(){
       <div class="snapcell"><div class="l">WC%</div><div class="v">${fmt(latest.wc,1)}</div></div>
     </div>
     <div class="snapline">
-      <div class="oilgas">Oil <b>${fmt(latest.oil,2)}</b> m³/d &nbsp;·&nbsp; Gas <b>${fmt(latest.gas,0)}</b> SCMD</div>
+      <div class="oilgas">Oil <b>${fmt(latest.oil,2)}</b> m³/d &nbsp;·&nbsp; Form. Gas <b>${fmt(formationGasOf(latest),0)}</b> SCMD <span style="color:var(--faint);font-size:.8em">(${fmt(latest.gas,0)} total)</span></div>
       <div class="lastdate">${latest.testDate?dstr(latest.testDate):'—'}</div>
     </div>`
     :`<div class="wellhead"><div class="num">#<span>${esc(w)}</span></div>
@@ -609,12 +682,17 @@ function renderMain(){
     </div>`;
   };
 
+  // ---- oil / formation gas / WC trend chart (chronological, oldest→newest) ----
+  const chartTests=tests.slice().sort((a,b)=>+a.testDate-+b.testDate).filter(t=>t.testDate);
+  const trendChartHtml=chartTests.length>=2?buildTrendChart(chartTests):
+    `<div class="empty-note">Not enough dated test records to plot a trend.</div>`;
+
   // ---- test history table ----
   const testRows=tests.slice(0,visibleTestRows);
-  const testBody=tests.length?`<div class="scroll"><table class="testtable">
-    <thead><tr><th>Date</th><th>THP</th><th>ABP</th><th>CHP</th><th>Liq</th><th>WC%</th><th>Oil</th><th>Gas</th></tr></thead>
+  const testBody=tests.length?`<div class="chartbox">${trendChartHtml}</div><div class="scroll"><table class="testtable">
+    <thead><tr><th>Date</th><th>THP</th><th>ABP</th><th>CHP</th><th>Liq</th><th>WC%</th><th>Oil</th><th>Form.Gas</th><th>Total Gas</th></tr></thead>
     <tbody>${testRows.map(t=>`<tr><td>${t.testDate?dstr(t.testDate):'—'}</td><td>${fmt(t.thp,1)}</td><td>${fmt(t.abp,1)}</td><td>${fmt(t.chp,1)}</td>
-      <td>${fmt(t.liquid,1)}</td><td>${fmt(t.wc,1)}</td><td>${fmt(t.oil,2)}</td><td>${fmt(t.gas,0)}</td></tr>`).join('')}</tbody>
+      <td>${fmt(t.liquid,1)}</td><td>${fmt(t.wc,1)}</td><td>${fmt(t.oil,2)}</td><td>${fmt(formationGasOf(t),0)}</td><td class="mut">${fmt(t.gas,0)}</td></tr>`).join('')}</tbody>
     </table></div>
     ${tests.length>visibleTestRows?`<button class="morebtn" onclick="visibleTestRows+=25;renderMain()">Show ${Math.min(25,tests.length-visibleTestRows)} more (of ${tests.length})</button>`:''}`
     :'';
@@ -625,17 +703,30 @@ function renderMain(){
     ${j.detail?`<div class="detail">${esc(j.detail.slice(0,220))}${j.detail.length>220?'…':''}</div>`:''}
   </div>`).join('');
 
-  // ---- gain/loss ----
-  const glCls=s=>s==='GAIN'?'gl-gain':s==='LOSS'?'gl-loss':s==='PENDING'?'gl-pending':'gl-stable';
-  const glBody=gl.map(g=>`<div class="row">
-    <div class="top"><span class="date">${g.date?dstr(g.date):'—'}</span><span class="tag ${glCls(g.status)}">${g.status==='GAIN'?'▲':g.status==='LOSS'?'▼':'●'} ${esc(g.status)}</span></div>
-    <div class="detail">${esc(g.jobtype)}</div>
+  // ---- gain/loss: manual sheet entries + auto-computed, merged into ONE date-sorted list (latest first) ----
+  const glCls=s=>(s==='GAIN'||s==='REVIVED')?'gl-gain':(s==='LOSS'||s==='NOT REVIVED')?'gl-loss':s==='PENDING'?'gl-pending':'gl-stable';
+  const glArrow=s=>(s==='GAIN'||s==='REVIVED')?'▲':(s==='LOSS'||s==='NOT REVIVED')?'▼':'●';
+  const manualEntries=gl.map(g=>({date:g.date,html:`<div class="row">
+    <div class="top"><span class="date">${g.date?dstr(g.date):'—'}</span><span class="tag ${glCls(g.status)}">${glArrow(g.status)} ${esc(g.status)}</span></div>
+    <div class="detail">${esc(g.jobtype)} <span style="color:var(--faint)">(manually logged)</span></div>
     <div class="figs">
       <span><b>PRE </b>oil ${fmt(g.preoil,2)} · wc ${fmt(g.prewc,1)}%</span>
     </div>
     ${g.status!=='PENDING'?`<div class="figs"><span><b>POST </b>oil ${fmt(g.postoil,2)} · wc ${fmt(g.postwc,1)}%</span></div>
-    <div class="figs"><span style="color:${g.oilgl>0?'var(--teal)':g.oilgl<0?'var(--red)':'var(--dim)'}"><b>Δ OIL </b>${g.oilgl>0?'+':''}${fmt(g.oilgl,2)} m³/d</span></div>`:''}
-  </div>`).join('');
+    <div class="figs"><span style="color:${g.oilgl>0?'var(--teal)':g.oilgl<0?'var(--red)':'var(--dim)'}"><b>Δ OIL </b>${g.oilgl>0?'+':''}${fmt(g.oilgl,2)} m³/d</span>
+      <span style="color:var(--faint)"><b>TOTAL GAS </b>${fmt(g.pregas,0)}→${fmt(g.postgas,0)} SCMD (reference only — this sheet has no lift-gas column, so Formation Gas can't be derived here)</span></div>`:''}
+  </div>`}));
+  const autoEntries=autoEffects.map(e=>({date:e.date,html:`<div class="row">
+    <div class="top"><span class="date">${dstr(e.date)}</span><span class="tag ${glCls(e.status)}">${glArrow(e.status)} ${esc(e.status)}</span></div>
+    <div class="detail">${esc(e.job)}${e.isWorkover?' <span style="color:var(--faint)">(workover-class — wider match window)</span>':''} <span style="color:var(--faint)">(auto-matched from test history)</span></div>
+    <div class="figs"><span><b>BEFORE </b>oil ${fmt(e.beforeOil,2)} · wc ${fmt(e.beforeWc,1)}% <span style="color:var(--faint)">(${dstr(e.beforeDate)})</span></span></div>
+    <div class="figs"><span><b>AFTER </b>oil ${fmt(e.afterOil,2)} · wc ${fmt(e.afterWc,1)}% <span style="color:var(--faint)">(${dstr(e.afterDate)})</span></span>
+      <span style="color:${e.deltaOil>0?'var(--teal)':e.deltaOil<0?'var(--red)':'var(--dim)'}"><b>Δ OIL </b>${e.deltaOil>0?'+':''}${fmt(e.deltaOil,2)} m³/d</span></div>
+    <div class="figs"><span style="color:var(--faint)"><b>FORM. GAS </b>${fmt(e.beforeFormGas,0)}→${fmt(e.afterFormGas,0)} SCMD (reference only, not scored) · total ${fmt(e.beforeGas,0)}→${fmt(e.afterGas,0)}</span></div>
+  </div>`}));
+  const glMerged=[...manualEntries,...autoEntries].sort((a,b)=>(b.date?+b.date:0)-(a.date?+a.date:0));
+  const glBody=glMerged.map(x=>x.html).join('');
+  const glCount=gl.length+autoEffects.length;
 
   // ---- water samples ----
   const whBody=wh.map(s=>`<div class="row">
@@ -659,10 +750,56 @@ function renderMain(){
     ${snapshot}
     ${sec('test','Well Test History',tests.length,testBody,'No test-history rows for this well.')}
     ${sec('job','WSS Job History',jobs.length,jobBody,'No job records for this well.')}
-    ${sec('gl','Gain / Loss',gl.length,glBody,'No before/after job comparisons for this well.')}
+    ${sec('gl','Gain / Loss',glCount,glBody,'No before/after job comparisons for this well — needs both a job and a test before/after it.')}
     ${sec('wh','Water Samples',wh.length,whBody,'No water-sample records for this well.')}
     ${sec('bhs','Workover / BHS Studies',bhs.length,bhsBody,'No workover studies recorded for this well.')}
   `;
+}
+
+/* Auto-computed before/after job effect, matched against this well's own
+   test history — same logic used in the full Intelligence Model. The
+   Master File's WSS GAIN LOSS sheet only has 5 manually-logged records
+   field-wide, so for almost every well that sheet alone shows nothing;
+   this computes a real comparison from actual test data instead. */
+const FEEBLE_OIL_THRESHOLD=0.1;
+const WORKOVER_GAP_DAYS=7;
+/* Jobs are generally taken when a well ceases to flow, shows feeble flow, is
+   declining, or needs fishing — so the expected pre-job oil rate is already
+   low/zero, and REVIVED (not a numeric "gain") is what success means there.
+   Some jobs (e.g. routine HOC) are instead preventive, done on a well
+   that's still flowing normally — there, holding steady (STABLE) is itself
+   a good outcome. This classification is OIL ONLY — gas/formation gas are
+   shown as plain before/after reference figures with no separate up/down
+   status of their own. */
+function classifyGainLoss(beforeOil,afterOil){
+  const b=+beforeOil||0,a=+afterOil||0;
+  if(b<FEEBLE_OIL_THRESHOLD)return a>=FEEBLE_OIL_THRESHOLD?'REVIVED':'NOT REVIVED';
+  const d=a-b;
+  if(d>0.05)return'GAIN';
+  if(d<-0.05)return'LOSS';
+  return'STABLE';
+}
+function computeAutoJobEffects(well,testsDesc,jobsDesc){
+  const tests=testsDesc.slice().sort((a,b)=>+a.testDate-+b.testDate);
+  const jobs=jobsDesc.slice().sort((a,b)=>+a.date-+b.date);
+  const effects=[];
+  for(let i=0;i<jobs.length;i++){
+    const job=jobs[i];
+    if(!job.date)continue;
+    const isWOR=isWorkoverClass(job.job);
+    const minGapMs=isWOR?WORKOVER_GAP_DAYS*DAY:0;
+    const windowEnd=i+1<jobs.length&&jobs[i+1].date?+jobs[i+1].date:Infinity;
+    let before=null;for(const t of tests){if(t.testDate&&+t.testDate<=+job.date)before=t;else if(t.testDate)break;}
+    let after=null;for(const t of tests){if(t.testDate&&+t.testDate>+job.date+minGapMs&&+t.testDate<windowEnd){after=t;break;}}
+    if(before&&after){
+      const dOil=+(after.oil-before.oil).toFixed(3);
+      effects.push({well,date:job.date,job:job.job,isWorkover:isWOR,beforeDate:before.testDate,afterDate:after.testDate,
+        beforeOil:before.oil,afterOil:after.oil,deltaOil:dOil,beforeWc:before.wc,afterWc:after.wc,
+        beforeGas:before.gas,afterGas:after.gas,beforeFormGas:formationGasOf(before),afterFormGas:formationGasOf(after),
+        status:classifyGainLoss(before.oil,after.oil),source:'auto'});
+    }
+  }
+  return effects;
 }
 
 renderMain();
