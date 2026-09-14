@@ -1,4 +1,4 @@
-const CACHE_NAME = 'area3-well-lookup-v2';
+const CACHE_NAME = 'area3-well-lookup-v3';
 const CORE_ASSETS = [
   './',
   './index.html',
